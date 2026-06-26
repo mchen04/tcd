@@ -12,6 +12,13 @@ its name instead of the full thing.
   marked `▸` and sorted first, with window count and creation time). With an
   argument, attaches to the first session whose name contains `partial`
   (case-insensitive). So `tcd zer` reattaches to `ZER-259-claude-579067`.
+- **`tcd close [partial]`** — the mirror image of attaching: kill sessions by
+  partial name instead of memorizing the full one. `tcd close` (no argument)
+  closes the session you're currently in; `tcd close zer` closes *every* session
+  matching `zer` (handy for clearing out a project's agents at once); `tcd close
+  all` closes everything. Closing kills the session's processes, so it lists what
+  it's about to kill and asks for a one-key `y/N` confirmation — pass `-y` (or
+  `-f`) to skip it. `kill`, `rm`, and `x` work as aliases for `close`.
 - **Auto-named sessions** — `claude` and `codex` are wrapped so that when you run
   them outside tmux they launch *inside* a tmux session named after the current
   project (`<repo>-<program>-<hash>`). The path hash keeps same-named repos in
@@ -69,10 +76,14 @@ and merge `.tmux.conf` into your own.
 ## Usage
 
 ```sh
-tcd            # list all sessions
-tcd zer        # attach/switch to the first session matching "zer"
-claude         # outside tmux: opens a named session for this project
-claude --yolo  # = claude --dangerously-skip-permissions
+tcd              # list all sessions
+tcd zer          # attach/switch to the first session matching "zer"
+tcd close        # close the session you're in right now
+tcd close zer    # close every session matching "zer" (asks to confirm)
+tcd close -y zer # ...same, but skip the confirmation prompt
+tcd close all    # close every session
+claude           # outside tmux: opens a named session for this project
+claude --yolo    # = claude --dangerously-skip-permissions
 ```
 
 ## License
