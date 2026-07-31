@@ -38,7 +38,7 @@ _ai_tmux_session() {
   local program="$2"
   shift 2
 
-  if [[ -n "$TMUX" ]]; then
+  if [[ -n "${TMUX:-}" ]]; then
     command "$program" "$@"
     return
   fi
@@ -123,7 +123,7 @@ _tcd_close() {
   local -a to_close=()
   if [[ ${#targets[@]} -eq 0 ]]; then
     # No target: close the session this shell is attached to.
-    if [[ -z "$TMUX" ]]; then
+    if [[ -z "${TMUX:-}" ]]; then
       print -r -- "tcd close: not inside a tmux session — say which to close, e.g. 'tcd close zer' or 'tcd close all'"
       _tcd_list
       return 1
@@ -137,7 +137,7 @@ _tcd_close() {
     # Close every session matching the partial (the symmetric counterpart of
     # attach picking the first match — clearing a project's agents at once).
     local matches
-    matches="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -i -- "${targets[1]}")"
+    matches="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -iF -- "${targets[1]}")"
     [[ -n "$matches" ]] && to_close=("${(@f)matches}")
     if [[ ${#to_close[@]} -eq 0 ]]; then
       print -r -- "no tmux session matching: ${targets[1]}"
@@ -163,7 +163,7 @@ _tcd_close() {
 
   local s rc=0
   for s in "${to_close[@]}"; do
-    if tmux kill-session -t "$s" 2>/dev/null; then
+    if tmux kill-session -t "=$s" 2>/dev/null; then
       print -r -- "closed: $s"
     else
       print -r -- "failed to close: $s"
@@ -174,7 +174,7 @@ _tcd_close() {
 }
 
 tcd() {
-  if [[ -z "$1" ]]; then
+  if [[ -z "${1:-}" ]]; then
     _tcd_list
     return
   fi
@@ -186,15 +186,15 @@ tcd() {
       ;;
   esac
   local match
-  match="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -i -- "$1" | head -1)"
+  match="$(tmux ls -F '#{session_name}' 2>/dev/null | grep -iF -- "$1" | head -1)"
   if [[ -z "$match" ]]; then
     print -r -- "no tmux session matching: $1"
     _tcd_list
     return 1
   fi
-  if [[ -n "$TMUX" ]]; then
-    tmux switch-client -t "$match"
+  if [[ -n "${TMUX:-}" ]]; then
+    tmux switch-client -t "=$match"
   else
-    tmux attach -t "$match"
+    tmux attach -t "=$match"
   fi
 }
