@@ -86,6 +86,15 @@ claude           # outside tmux: opens a named session for this project
 claude --yolo    # = claude --dangerously-skip-permissions
 ```
 
+## Smoke test
+
+```sh
+zsh tests/smoke.zsh
+```
+
+The test uses a private tmux server, so it never attaches to or closes your
+real sessions.
+
 ## License
 
 MIT
