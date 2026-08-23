@@ -8,10 +8,14 @@ its name instead of the full thing.
 
 ## What you get
 
-- **`tcd [partial]`** — with no argument, lists your tmux sessions (attached ones
-  marked `▸` and sorted first, with window count and creation time). With an
-  argument, attaches to the first session whose name contains `partial`
-  (case-insensitive). So `tcd zer` reattaches to `ZER-259-claude-579067`.
+- **`tcd [row|partial]`** — lists compact numbered rows with attachment, agent
+  state, and age. Use a row number or name fragment to attach. Exact names win
+  over partial matches, and `tcd -` returns to the previous session.
+- **Phone-first launch commands** — `tcd cl [project]` and `tcd co [project]`
+  start or attach Claude and Codex. Projects can be paths or short folder-name
+  matches under configured project roots.
+- **Remote Macs** — `tcd @host [command]` runs the same command through SSH.
+  `tcd hosts` shows configured hosts and whether they answer.
 - **`tcd close [partial]`** — the mirror image of attaching: kill sessions by
   partial name instead of memorizing the full one. `tcd close` (no argument)
   closes the session you're currently in; `tcd close zer` closes *every* session
@@ -31,6 +35,8 @@ its name instead of the full thing.
   [continuum](https://github.com/tmux-plugins/tmux-continuum) so sessions
   (including `claude`/`codex` processes) survive reboots, and windows are named
   after their directory rather than the running process.
+- **Install checks** — `tcd doctor` reports missing tools, shell setup, project
+  roots, remote hosts, and local session count.
 
 ## Why
 
@@ -77,7 +83,13 @@ and merge `.tmux.conf` into your own.
 
 ```sh
 tcd              # list all sessions
+tcd 2            # attach to row 2
 tcd zer          # attach/switch to the first session matching "zer"
+tcd -            # return to the previous session
+tcd cl pancake   # start or attach Claude in the Pancake project
+tcd co pancake   # start or attach Codex in the Pancake project
+tcd @mbp         # list sessions on a configured remote Mac
+tcd doctor       # check the local setup
 tcd close        # close the session you're in right now
 tcd close zer    # close every session matching "zer" (asks to confirm)
 tcd close -y zer # ...same, but skip the confirmation prompt
@@ -86,14 +98,15 @@ claude           # outside tmux: opens a named session for this project
 claude --yolo    # = claude --dangerously-skip-permissions
 ```
 
-## Smoke test
+## Tests and safety
 
 ```sh
 zsh tests/smoke.zsh
 ```
 
-The test uses a private tmux server, so it never attaches to or closes your
-real sessions.
+Tests must use the private socket helper in `tests/lib.zsh`. They must never run
+an unsocketed destructive tmux command. The benchmark covers read-only list and
+match performance; it does not close sessions.
 
 ## License
 
