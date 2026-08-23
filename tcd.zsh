@@ -21,12 +21,16 @@ typeset -ga TCD_HOSTS TCD_PROJECT_DIRS
 _tcd_config_file="${XDG_CONFIG_HOME:-$HOME/.config}/tcd/config.zsh"
 [[ -r "$_tcd_config_file" ]] && source "$_tcd_config_file"
 
-# Every tmux call in this file goes through this one function. Production talks
-# to the default server; the test suite overrides _tcd_tmux to point at a
-# private -S socket, which is the only reason the tests can be trusted not to
-# kill the caller's sessions. `command` skips any user alias or function named
-# tmux.
-_tcd_tmux() { command tmux "$@" }
+# Every tmux call in this file goes through this function. Production uses the
+# current/default server. Tests set TCD_TMUX_SOCKET before source, so loading
+# this file cannot reset their private route. `command` skips user wrappers.
+_tcd_tmux() {
+  if [[ -n "${TCD_TMUX_SOCKET:-}" ]]; then
+    command tmux -S "$TCD_TMUX_SOCKET" "$@"
+  else
+    command tmux "$@"
+  fi
+}
 
 _tcd_have_tmux() { command -v tmux >/dev/null 2>&1 }
 

@@ -29,12 +29,12 @@ its name instead of the full thing.
   different folders from colliding. Run them inside tmux and they behave normally.
 - **`--yolo` shorthand** — `claude --yolo` expands to
   `claude --dangerously-skip-permissions`.
-- **Auto save/restore** — `.tmux.conf` sets up
+- **Session snapshots** — `.tmux.conf` sets up
   [tpm](https://github.com/tmux-plugins/tpm) +
   [resurrect](https://github.com/tmux-plugins/tmux-resurrect) +
-  [continuum](https://github.com/tmux-plugins/tmux-continuum) so sessions
-  (including `claude`/`codex` processes) survive reboots, and windows are named
-  after their directory rather than the running process.
+  [continuum](https://github.com/tmux-plugins/tmux-continuum) to save layouts
+  every five minutes. Automatic restore is off. Running processes do not
+  survive a lost tmux server.
 - **Install checks** — `tcd doctor` reports missing tools, shell setup, project
   roots, remote hosts, and local session count.
 
