@@ -67,8 +67,30 @@ section 'harness safety'
 # ---------------------------------------------------------------------------
 assert_eq 'TMUX is unset inside the suite' '' "${TMUX:-}"
 assert_contains 'socket lives in the private temp dir' "$TCD_SOCKET" "$TCD_TEST_TMP"
+assert_eq 'bare tmux fallback is private' "$TCD_TEST_TMP" "$TMUX_TMPDIR"
 assert_eq 'config is the private one' 'mini mbp' "${(j: :)TCD_HOSTS}"
 assert_contains 'project dirs are the private ones' "${TCD_PROJECT_DIRS[1]}" "$TCD_TEST_TMP"
+
+# A declared socket must beat an inherited client route after TCD loads.
+route_socket="$TCD_TEST_TMP/route-socket"
+decoy_socket="$TCD_TEST_TMP/decoy-socket"
+"$TCD_REAL_TMUX" -S "$decoy_socket" new-session -d -s decoy-sentinel
+decoy_pid="$("$TCD_REAL_TMUX" -S "$decoy_socket" display-message -p '#{pid}')"
+decoy_pane="$("$TCD_REAL_TMUX" -S "$decoy_socket" display-message -p '#{pane_id}')"
+(
+  TCD_TMUX_SOCKET="$route_socket"
+  export TMUX="$decoy_socket,$decoy_pid,${decoy_pane#%}"
+  export TMUX_PANE="$decoy_pane"
+  source "$TCD_LIB"
+  _tcd_tmux new-session -d -s route-probe
+)
+route_hit=0 decoy_hit=0
+"$TCD_REAL_TMUX" -S "$route_socket" has-session -t '=route-probe' 2>/dev/null && route_hit=1
+"$TCD_REAL_TMUX" -S "$decoy_socket" has-session -t '=route-probe' 2>/dev/null && decoy_hit=1
+assert_eq 'declared socket survives source' '1' "$route_hit"
+assert_eq 'inherited TMUX cannot seize the route' '0' "$decoy_hit"
+"$TCD_REAL_TMUX" -S "$route_socket" kill-server 2>/dev/null || true
+"$TCD_REAL_TMUX" -S "$decoy_socket" kill-server 2>/dev/null || true
 
 # Both directions of the safety claim: no test file may name a destructive tmux
 # command without going through a socketed helper.
@@ -178,14 +200,15 @@ section 'matching'
 tmux_ new-session -d -s 'smoke[1]'
 tmux_ new-session -d -s smoke1
 tmux_ new-session -d -s Alpha
+tmux_ new-session -d -s Beta
 assert_eq 'literal match ignores glob metacharacters' 'smoke[1]' "$(_tcd_match 'smoke[1]')"
 assert_eq 'case-insensitive substring match' 'Alpha' "$(_tcd_match alph)"
 assert_status 'no match returns 1' 1 _tcd_match 'zzz-nope'
 
 # Row numbers select from the same order the listing prints.
 assert_eq 'row 1 is Alpha' 'Alpha' "$(_tcd_nth 1)"
-assert_eq 'row 2 is smoke[1]' 'smoke[1]' "$(_tcd_nth 2)"
-assert_eq 'tcd <n> resolves a row number' 'smoke1' "$(_tcd_match 3)"
+assert_eq 'row 2 is Beta' 'Beta' "$(_tcd_nth 2)"
+assert_eq 'tcd <n> resolves a row number' 'Beta' "$(_tcd_match 2)"
 assert_status 'a row past the end fails' 1 _tcd_match 9
 assert_status 'row 0 fails' 1 _tcd_nth 0
 

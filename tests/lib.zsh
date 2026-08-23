@@ -21,19 +21,17 @@ unset TMUX TMUX_PANE
 typeset -g TCD_TEST_TMP="$(mktemp -d "${TMPDIR:-/tmp}/tcd-test.XXXXXX")"
 TCD_TEST_TMP="${TCD_TEST_TMP:A}"   # resolved, so paths compare equal to :A results
 chmod 700 "$TCD_TEST_TMP"
-typeset -g TCD_SOCKET="$TCD_TEST_TMP/socket"
+export TMUX_TMPDIR="$TCD_TEST_TMP"
+mkdir -p "$TMUX_TMPDIR/tmux-$UID"
+chmod 700 "$TMUX_TMPDIR/tmux-$UID"
+typeset -g TCD_SOCKET="$TMUX_TMPDIR/tmux-$UID/default"
+typeset -g TCD_TMUX_SOCKET="$TCD_SOCKET"
 
 # The only sanctioned way to talk to tmux from a test.
 tmux_() { "$TCD_REAL_TMUX" -S "$TCD_SOCKET" "$@" }
 
-# tcd.zsh routes every tmux call through _tcd_tmux, so overriding it points the
-# library at the private socket without touching the library's source.
-_tcd_tmux() { "$TCD_REAL_TMUX" -S "$TCD_SOCKET" "$@" }
-
 # Source tcd.zsh with the AI CLIs stubbed (so the claude/codex wrappers always
-# get defined, installed or not) and _tcd_tmux re-pinned to the private socket
-# -- tcd.zsh defines _tcd_tmux itself, so the override has to be reapplied
-# after sourcing.
+# get defined, installed or not). TCD_TMUX_SOCKET keeps all calls private.
 tcd_load() {
   local stub_bin="$TCD_TEST_TMP/bin"
   mkdir -p "$stub_bin"
@@ -57,7 +55,6 @@ tcd_load() {
   [[ -n "${TCD_TEST_CONFIG:-}" ]] && print -r -- "$TCD_TEST_CONFIG" > "$XDG_CONFIG_HOME/tcd/config.zsh"
 
   source "$TCD_LIB"
-  _tcd_tmux() { "$TCD_REAL_TMUX" -S "$TCD_SOCKET" "$@" }
 }
 
 tcd_harness_cleanup() {
@@ -69,7 +66,8 @@ tcd_harness_cleanup() {
 # Assert the harness itself is safe. Called at suite start; fails loudly.
 tcd_assert_isolated() {
   [[ -z "${TMUX:-}" ]] || { print -u2 -r -- "REFUSING TO RUN: \$TMUX is set ($TMUX)"; exit 1 }
-  [[ "$TCD_SOCKET" == "$TCD_TEST_TMP/socket" ]] || { print -u2 -r -- "socket escaped temp dir"; exit 1 }
+  [[ "$TMUX_TMPDIR" == "$TCD_TEST_TMP" ]] || { print -u2 -r -- "fallback root escaped temp dir"; exit 1 }
+  [[ "$TCD_SOCKET" == "$TCD_TEST_TMP/tmux-$UID/default" ]] || { print -u2 -r -- "socket escaped temp dir"; exit 1 }
   # A private server must start out empty; if it already has sessions we are
   # almost certainly pointed at somebody else's socket.
   local existing
