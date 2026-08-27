@@ -102,10 +102,13 @@ assert_eq 'no unsocketed destructive tmux call in tests/' '' "$bad_calls"
 # ---------------------------------------------------------------------------
 section 'session name derivation'
 # ---------------------------------------------------------------------------
+# The repo dir is not always named "tcd" -- a git worktree gets its own folder
+# name -- so the expectation is derived, not hard-coded.
+repo_slug="${TCD_REPO_DIR:t}"
 name="$(_ai_tmux_project_session_name claude)"
-assert_true 'name is <repo>-claude-<hash>' eval "[[ \"$name\" == tcd-claude-[0-9]## ]]"
+assert_true 'name is <repo>-claude-<hash>' eval "[[ \"$name\" == $repo_slug-claude-[0-9]## ]]"
 codex_name="$(_ai_tmux_project_session_name codex)"
-assert_true 'name is program-specific' eval "[[ \"$codex_name\" == tcd-codex-[0-9]## ]]"
+assert_true 'name is program-specific' eval "[[ \"$codex_name\" == $repo_slug-codex-[0-9]## ]]"
 
 # Same folder name in two different paths must not collide.
 mkdir -p "$TCD_TEST_TMP/a/Proj Name" "$TCD_TEST_TMP/b/Proj Name"
@@ -260,7 +263,10 @@ assert_contains 'help documents close' "$out" 'tcd close <n|part>'
 assert_contains 'help documents the aliases' "$out" 'kill, rm and x are aliases'
 assert_contains 'help documents remote hosts' "$out" 'tcd @host'
 assert_eq 'tcd help is the same text' "$out" "$(tcd help)"
-assert_eq 'tcd ls lists' "$(_tcd_list)" "$(tcd ls)"
+# Ages advance between the two calls, so the volatile column is dropped: the
+# claim is that `tcd ls` routes to the listing, not that a clock stood still.
+no_age() { sed 's/ [0-9][0-9]*[smhd]$//' }
+assert_eq 'tcd ls lists' "$(_tcd_list | no_age)" "$(tcd ls | no_age)"
 
 # ---------------------------------------------------------------------------
 section 'close'
