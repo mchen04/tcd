@@ -605,6 +605,252 @@ out="$(login_shell env TCD_LOGIN_LIST=1 TMUX=fake-client)"
 assert_not_contains 'login list stays quiet inside tmux' "$out" 'login-demo'
 
 # ---------------------------------------------------------------------------
+section 'live view (offline parts)'
+# ---------------------------------------------------------------------------
+reset_server
+tmux_ new-session -d -s Alpha
+tmux_ new-session -d -s beta
+
+# The whole point of the live view: its body is the listing, not a second
+# implementation of it. Ages tick, so the volatile column is dropped.
+frame="$(LINES=24 _tcd_live_frame)"
+body="${frame%$'\n'*}"
+assert_eq 'a frame body is exactly the normal listing' \
+  "$(_tcd_list | no_age)" "$(print -r -- "$body" | no_age)"
+assert_eq 'the last line is the footer' 'live · q quit' "${frame##*$'\n'}"
+assert_contains 'the footer names the quit key' "$frame" 'q quit'
+
+# Columns, ordering, truncation and status all come along for free, but assert
+# them through the live path too so a future short-cut cannot skip them.
+assert_true 'live rows are numbered from the same order' \
+  eval "[[ \"\${frame%%\$'\n'*}\" == ' 1 '*Alpha* ]]"
+tmux_ new-session -d -s a-very-long-session-name-that-will-not-fit-on-a-phone
+narrow="$(COLUMNS=36 LINES=24 _tcd_live_frame)"
+longest=0
+for line in ${(f)narrow}; do (( ${#line} > longest )) && longest=${#line}; done
+assert_true "live rows fit in 36 columns (longest $longest)" eval "(( $longest <= 36 ))"
+assert_contains 'live truncates long names too' "$narrow" '…'
+tmux_ kill-session -t '=a-very-long-session-name-that-will-not-fit-on-a-phone'
+
+tmux_ new-session -d -s live-agent "$TCD_STUB_BIN/claude --sleep"
+wait_state live-agent claude
+assert_contains 'live shows the same agent status' "$(LINES=24 _tcd_live_frame)" 'claude'
+tmux_ kill-session -t '=live-agent'
+
+# Height: a frame never exceeds the terminal, so it cannot scroll itself away.
+for h in 1 2 3 6 24; do
+  n=$(print -rl -- "$(LINES=$h _tcd_live_frame)" | wc -l | tr -d ' ')
+  assert_true "a frame fits in $h lines (got $n)" eval "(( $n <= $h ))"
+done
+for i in 1 2 3 4 5 6 7 8; do tmux_ new-session -d -s "fill-$i"; done
+short="$(LINES=6 _tcd_live_frame)"
+assert_eq 'a clamped frame is exactly the terminal height' '6' "$(print -rl -- "$short" | wc -l | tr -d ' ')"
+assert_contains 'a clamped frame says how many rows are hidden' "$short" ' more'
+assert_eq 'the footer survives clamping' 'live · q quit' "${short##*$'\n'}"
+for i in 1 2 3 4 5 6 7 8; do tmux_ kill-session -t "=fill-$i"; done
+
+# An empty server keeps the same message -- and the same failure status -- so
+# the live view still tells a new user how to start something.
+reset_server
+empty="$(LINES=24 _tcd_live_frame)"; rc=$?
+assert_contains 'an empty server still explains itself' "$empty" 'no tmux sessions'
+assert_contains 'an empty server still offers a next step' "$empty" 'tcd cl <project>'
+assert_eq 'an empty frame reports the empty status' '1' "$rc"
+
+# Redraw shape: home, overwrite each line, erase its tail, erase the rest.
+# No clear-screen and no trailing newline -- that is what makes it flicker-free
+# and stops a full-height frame from scrolling the terminal by one line.
+drawn="$(_tcd_live_draw $'aa\nbb')"
+# A command substitution strips trailing newlines, so anything asserted about
+# the end of a frame needs a sentinel to survive the capture.
+raw="$(_tcd_live_draw $'aa\nbb'; print -rn -- '|END')"
+assert_true 'a redraw homes the cursor first' eval "[[ \"\$drawn\" == \$'\\e[H'* ]]"
+assert_contains 'a redraw erases each line it writes' "$drawn" $'aa\e[K'
+assert_contains 'a redraw separates lines with CR LF' "$drawn" $'\e[K\r\nbb'
+tail="${raw%|END}"
+assert_true 'a redraw erases below the last line' eval "[[ \"\$tail\" == *\$'\\e[J' ]]"
+assert_not_contains 'a redraw never clears the screen' "$drawn" $'\e[2J'
+assert_true 'a redraw emits no trailing newline' eval "[[ \"\${tail: -1}\" != \$'\n' ]]"
+
+# Refresh interval: small by default, and never 0 (which would spin the CPU).
+assert_eq 'the default interval is 2s' '2' "$(_tcd_live_secs)"
+assert_eq 'a zero interval is clamped up' '0.2' "$(TCD_LIVE_INTERVAL=0 _tcd_live_secs)"
+assert_eq 'a huge interval is clamped down' '60' "$(TCD_LIVE_INTERVAL=900 _tcd_live_secs)"
+assert_eq 'a nonsense interval falls back' '2' "$(TCD_LIVE_INTERVAL=abc _tcd_live_secs)"
+assert_eq 'a fractional interval is kept' '0.5' "$(TCD_LIVE_INTERVAL=0.5 _tcd_live_secs)"
+
+# Without a terminal there is nothing to draw on and no key to read.
+out="$(_tcd_live </dev/null 2>&1)"; rc=$?
+assert_contains 'live without a tty explains itself' "$out" 'needs a terminal'
+assert_eq 'live without a tty returns 1' '1' "$rc"
+assert_not_contains 'live without a tty writes no escape codes' "$out" $'\e['
+# Restoring when nothing was set up must be a no-op, not an escape-code burst.
+unset _TCD_LIVE_TTY _TCD_LIVE_ON
+assert_eq 'restoring an inactive live view emits nothing' '' "$(_tcd_live_restore)"
+
+# Dispatch, help and completion.
+_tcd_live() { print -r -- 'LIVE-CALLED' }
+assert_eq 'tcd --live runs the live view' 'LIVE-CALLED' "$(tcd --live)"
+unfunction _tcd_live
+source "$TCD_LIB"
+assert_contains 'help documents --live' "$(tcd help)" 'tcd --live'
+comp="$(typeset -f _tcd_completion)"
+assert_contains 'completion offers --live' "$comp" '--live'
+
+# ---------------------------------------------------------------------------
+section 'live view (running in a pane)'
+# ---------------------------------------------------------------------------
+# The live view only exists on a terminal, so it is exercised on one: a pane of
+# the same private tmux server the rest of the suite uses. The pane is the tty;
+# capture-pane is what the user would be looking at.
+reset_server
+live_dir="$TCD_TEST_TMP/live"
+mkdir -p "$live_dir"
+
+# The driver records the terminal state around the call so the test can prove
+# every bit of it came back, then parks so the pane outlives the live view.
+cat > "$live_dir/drive.zsh" <<EOF
+export TCD_TMUX_SOCKET="$TCD_SOCKET"
+export TCD_LIVE_INTERVAL=0.3
+export COLUMNS=80 LINES=12
+source "$TCD_LIB"
+# Descendants of this shell, so the test can prove the live view leaves none.
+kids() { command ps -axo ppid= | tr -d ' ' | grep -cx \$\$ }
+command stty -g > "$live_dir/stty.before"
+kids > "$live_dir/kids.before"
+print -rn -- 'NORMAL-SCREEN-MARKER'
+tcd --live
+print -r -- \$? > "$live_dir/rc"
+command stty -g > "$live_dir/stty.after"
+kids > "$live_dir/kids.after"
+print -rn -- 'LIVE-VIEW-RETURNED'
+while :; do sleep 1; done
+EOF
+
+live_start() {   # live_start <session>
+  rm -f "$live_dir"/{rc,stty.before,stty.after,kids.before,kids.after}
+  tmux_ new-session -d -s "$1" -x 80 -y 12 "zsh -f '$live_dir/drive.zsh'"
+}
+live_pane() { tmux_ capture-pane -p -t "=$1:" 2>/dev/null }
+live_fmt()  { tmux_ display-message -p -t "=$1:" "$2" 2>/dev/null }
+# Poll rather than sleep a fixed time: the frame lands when it lands.
+live_wait() {    # live_wait <session> <needle>
+  local i
+  for (( i = 0; i < 80; i++ )); do
+    [[ "$(live_pane "$1")" == *"$2"* ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+live_wait_gone() {
+  local i
+  for (( i = 0; i < 80; i++ )); do
+    [[ "$(live_pane "$1")" != *"$2"* ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+live_wait_file() {
+  local i
+  for (( i = 0; i < 80; i++ )); do
+    [[ -s "$1" ]] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+# The age column of the row naming <needle>, digits only.
+live_age() {
+  local line
+  for line in ${(f)"$(live_pane "$1")"}; do
+    [[ "$line" == *"$2"* ]] || continue
+    line="${line##* }"
+    print -r -- "${line%[smhd]}"
+    return 0
+  done
+  return 1
+}
+
+live_start live-host
+assert_true 'the live view paints a first frame' live_wait live-host 'live · q quit'
+assert_true 'the live view lists its own session' live_wait live-host 'live-host'
+assert_eq 'the live view runs on the alternate screen' '1' "$(live_fmt live-host '#{alternate_on}')"
+assert_eq 'the live view hides the cursor' '0' "$(live_fmt live-host '#{cursor_flag}')"
+assert_not_contains 'the alternate screen hides what was on the terminal' \
+  "$(live_pane live-host)" 'NORMAL-SCREEN-MARKER'
+
+# Refresh: nobody touches the keyboard for any of this.
+tmux_ new-session -d -s live-added
+assert_true 'a new session appears by itself' live_wait live-host 'live-added'
+tmux_ kill-session -t '=live-added'
+assert_true 'a closed session disappears by itself' live_wait_gone live-host 'live-added'
+
+# Status and attachment changes show up the same way.
+tmux_ new-session -d -s live-agent "$TCD_STUB_BIN/claude --sleep"
+assert_true 'a session that starts an agent turns from idle to claude' live_wait live-host 'claude'
+tmux_ kill-session -t '=live-agent'
+assert_true 'the agent row goes when its session does' live_wait_gone live-host 'claude'
+
+# Attachment: a client attaching flips the marker column of that row.
+tmux_ new-session -d -s live-attached
+live_wait live-host 'live-attached'
+# A real client on a real terminal -- another pane of the same private server.
+# It goes through a script file because the nested quoting of an inline pane
+# command is what silently breaks here.
+cat > "$live_dir/client.zsh" <<EOF
+unset TMUX TMUX_PANE
+"$TCD_REAL_TMUX" -S "$TCD_SOCKET" attach -t '=live-attached'
+while :; do sleep 1; done
+EOF
+tmux_ new-session -d -s live-client -x 80 -y 12 "zsh -f '$live_dir/client.zsh'"
+assert_true 'attaching a client shows the ▸ marker' live_wait live-host '▸ live-attached'
+tmux_ kill-session -t '=live-client'
+assert_true 'detaching clears the marker' live_wait_gone live-host '▸ live-attached'
+tmux_ kill-session -t '=live-attached'
+
+# Ages advance on their own. A quiet session is used because the live view's
+# own pane keeps its session busy.
+tmux_ new-session -d -s live-clock
+live_wait live-host 'live-clock'
+age_first="$(live_age live-host live-clock)"
+sleep 4
+age_later="$(live_age live-host live-clock)"
+assert_true "ages advance without input ($age_first -> $age_later)" \
+  eval "[[ \"$age_first\" == <-> && \"$age_later\" == <-> ]] && (( $age_later > $age_first ))"
+tmux_ kill-session -t '=live-clock'
+
+# Redrawing must not scroll: on the alternate screen nothing reaches history.
+assert_eq 'many redraws add nothing to the scrollback' '0' "$(live_fmt live-host '#{history_size}')"
+
+# q quits, and every piece of terminal state comes back.
+tmux_ send-keys -t '=live-host:' 'q'
+assert_true 'q ends the live view' live_wait_file "$live_dir/rc"
+assert_eq 'q exits 0' '0' "$(cat "$live_dir/rc")"
+assert_eq 'q leaves the alternate screen' '0' "$(live_fmt live-host '#{alternate_on}')"
+assert_eq 'q restores the cursor' '1' "$(live_fmt live-host '#{cursor_flag}')"
+assert_eq 'q restores the tty modes exactly' "$(cat "$live_dir/stty.before")" "$(cat "$live_dir/stty.after")"
+assert_contains 'the terminal is back as it was' "$(live_pane live-host)" 'NORMAL-SCREEN-MARKER'
+assert_contains 'control returns to the caller' "$(live_pane live-host)" 'LIVE-VIEW-RETURNED'
+assert_eq 'the live view leaves no process behind' \
+  "$(cat "$live_dir/kids.before")" "$(cat "$live_dir/kids.after")"
+tmux_ kill-session -t '=live-host'
+
+# Ctrl-C is the other way out, and must clean up just as completely.
+live_start live-int
+assert_true 'the live view paints before the interrupt' live_wait live-int 'live · q quit'
+assert_eq 'the interrupt case starts on the alternate screen' '1' "$(live_fmt live-int '#{alternate_on}')"
+tmux_ send-keys -t '=live-int:' C-c
+assert_true 'Ctrl-C ends the live view' live_wait_file "$live_dir/rc"
+assert_eq 'Ctrl-C exits 130' '130' "$(cat "$live_dir/rc")"
+assert_eq 'Ctrl-C leaves the alternate screen' '0' "$(live_fmt live-int '#{alternate_on}')"
+assert_eq 'Ctrl-C restores the cursor' '1' "$(live_fmt live-int '#{cursor_flag}')"
+assert_eq 'Ctrl-C restores the tty modes exactly' "$(cat "$live_dir/stty.before")" "$(cat "$live_dir/stty.after")"
+assert_contains 'Ctrl-C hands the terminal back' "$(live_pane live-int)" 'LIVE-VIEW-RETURNED'
+assert_eq 'Ctrl-C leaves no process behind' \
+  "$(cat "$live_dir/kids.before")" "$(cat "$live_dir/kids.after")"
+tmux_ kill-session -t '=live-int'
+reset_server
+
+# ---------------------------------------------------------------------------
 print -r -- ""
 if (( TCD_TESTS_FAILED )); then
   print -u2 -r -- "FAILED: $TCD_TESTS_FAILED of $TCD_TESTS_RUN assertions"
