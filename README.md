@@ -11,6 +11,12 @@ its name instead of the full thing.
 - **`tcd [row|partial]`** — lists compact numbered rows with attachment, agent
   state, and age. Use a row number or name fragment to attach. Exact names win
   over partial matches, and `tcd -` returns to the previous session.
+- **`tcd --live`** — the same table, kept current. New sessions appear, closed
+  ones vanish, agent status and the attachment marker follow along, and ages
+  advance, without touching the keyboard. It repaints in place on the alternate
+  screen, so it neither flickers nor fills your scrollback; `q` or `Ctrl-C`
+  gives the terminal back exactly as it was. Refreshes every 2s by default —
+  set `TCD_LIVE_INTERVAL` in the config to change it.
 - **Phone-first launch commands** — `tcd cl [project]` and `tcd co [project]`
   start or attach Claude and Codex. Projects can be paths or short folder-name
   matches under configured project roots.
@@ -83,6 +89,7 @@ and merge `.tmux.conf` into your own.
 
 ```sh
 tcd              # list all sessions
+tcd --live       # ...and keep the list on screen, refreshing (q to quit)
 tcd 2            # attach to row 2
 tcd zer          # attach/switch to the first session matching "zer"
 tcd -            # return to the previous session
@@ -104,9 +111,14 @@ claude --yolo    # = claude --dangerously-skip-permissions
 zsh tests/smoke.zsh
 ```
 
+`zsh tests/mutate.zsh` is the positive control: it breaks one behaviour at a
+time in a copy of `tcd.zsh` and fails if the suite still passes.
+
 Tests must use the private socket helper in `tests/lib.zsh`. They must never run
-an unsocketed destructive tmux command. The benchmark covers read-only list and
-match performance; it does not close sessions.
+an unsocketed destructive tmux command. That includes the `--live` tests, which
+need a real terminal and get one from a pane of the same private server. The
+benchmark covers read-only list and match performance; it does not close
+sessions.
 
 ## License
 

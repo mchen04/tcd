@@ -10,6 +10,7 @@
 #   TCD_PROJECT_DIRS=(~/Projects) where `tcd cl <proj>` looks for project folders
 #   TCD_REMOTE=ssh                or mosh: how `tcd @host` connects
 #   TCD_LOGIN_LIST=1              list sessions when an ssh login lands in a shell
+#   TCD_LIVE_INTERVAL=2           seconds between `tcd --live` refreshes
 
 zmodload zsh/datetime 2>/dev/null
 
@@ -278,6 +279,143 @@ _tcd_list() {
     (( ${#shown} > namewidth )) && shown="${shown[1,namewidth-1]}…"
     printf '%2d %s %-*s  %-*s  %s\n' "$i" "$marks[i]" "$namewidth" "$shown" "$statwidth" "$stats[i]" "$ages[i]"
   done
+}
+
+# ---------------------------------------------------------------------------
+# Live view: `tcd --live` leaves the table on screen and keeps it current.
+#
+# A frame's body is literally what `tcd` prints — _tcd_live_frame calls
+# _tcd_list — so ordering, columns, width handling, status detection and the
+# age format cannot drift away from the one-shot listing.
+#
+# There is no background process and no subshell timer: the same `read` that
+# waits for a keypress is the frame clock, so `q` is instant and nothing is
+# left running afterwards. Frames go to the alternate screen, are built as one
+# string and written in one call, and repaint in place (home, overwrite, erase
+# to end of line, erase the rest) — never a clear-then-draw. That is what keeps
+# the scrollback intact and the redraw free of flicker.
+# ---------------------------------------------------------------------------
+
+# Terminal height, the counterpart of _tcd_cols.
+_tcd_lines() {
+  local l="${LINES:-}"
+  [[ "$l" == <1-> ]] || l="$(tput lines 2>/dev/null)"
+  [[ "$l" == <1-> ]] || l=24
+  print -r -- "$l"
+}
+
+# Seconds between frames. Ages are printed in seconds, so a couple of seconds
+# keeps them honest without rescanning every process ten times a second.
+# Clamped, because a 0 would spin the CPU and a huge value is not a live view.
+_tcd_live_secs() {
+  local s="${TCD_LIVE_INTERVAL:-2}"
+  [[ "$s" == <->(.<->|) ]] || s=2
+  (( s < 0.2 )) && s=0.2
+  (( s > 60 ))  && s=60
+  print -r -- "$s"
+}
+
+# One screenful: the list, trimmed to the terminal height, plus a footer line.
+# Trimming is what stops a long list from scrolling the frame off the top.
+_tcd_live_frame() {
+  local body rc=0
+  body="$(_tcd_list)" || rc=$?
+
+  local -a out=( "${(@f)body}" )
+  local -i term=$(_tcd_lines)
+  local -i avail=$(( term > 1 ? term - 1 : 1 ))   # the footer wants a line too
+  if (( ${#out} > avail )); then
+    local -i hidden=$(( ${#out} - avail + 1 ))
+    out=( "${(@)out[1,avail-1]}" "… ${hidden} more" )
+  fi
+
+  # A terminal with a single row has no line to spare for the footer.
+  if (( term > 1 )); then
+    local footer='live · q quit'
+    local -i cols=$(_tcd_cols)
+    (( ${#footer} > cols )) && footer="${footer[1,cols]}"
+    out+=( "$footer" )
+  fi
+
+  print -rl -- "${out[@]}"
+  return $rc
+}
+
+# Repaint in place: home the cursor, overwrite each line and erase its tail,
+# then erase whatever the previous frame left below. The last line gets no
+# newline, so a full-height frame cannot scroll the screen by one.
+_tcd_live_draw() {
+  local -a lines=( "${(@f)1}" )
+  local out=$'\e[H' i
+  for (( i = 1; i <= ${#lines}; i++ )); do
+    (( i > 1 )) && out+=$'\r\n'
+    out+="${lines[i]}"$'\e[K'
+  done
+  print -rn -- "$out"$'\e[J'
+}
+
+# Undo everything _tcd_live changed. Idempotent, and safe to call when setup
+# never happened — it is the single exit path for q, Ctrl-C and errors alike.
+_tcd_live_restore() {
+  [[ -n "${_TCD_LIVE_TTY:-}" ]] && command stty "$_TCD_LIVE_TTY" 2>/dev/null
+  (( ${_TCD_LIVE_ON:-0} )) && print -rn -- $'\e[?25h\e[?1049l'
+  unset _TCD_LIVE_TTY _TCD_LIVE_ON
+  return 0
+}
+
+_tcd_live() {
+  setopt localoptions localtraps
+
+  if [[ ! -t 0 || ! -t 1 ]]; then
+    print -u2 -r -- "tcd --live needs a terminal; plain 'tcd' prints the list once"
+    return 1
+  fi
+
+  local secs; secs="$(_tcd_live_secs)"
+
+  typeset -g _TCD_LIVE_TTY="$(command stty -g 2>/dev/null)"
+  typeset -g _TCD_LIVE_ON=0
+  typeset -g _TCD_LIVE_STOP=0
+
+  # Covers every way out, including a failure in the middle of a frame.
+  trap '_tcd_live_restore' EXIT
+  trap '_TCD_LIVE_STOP=2' INT
+
+  # One character at a time, no echo, signals still delivered so Ctrl-C works.
+  # Doing this here rather than leaning on `read -k` keeps the behaviour the
+  # same whether tcd is called from an interactive shell or a script.
+  command stty -icanon -echo min 1 time 0 2>/dev/null
+  print -rn -- $'\e[?1049h\e[?25l\e[2J'
+  _TCD_LIVE_ON=1
+
+  local key geom last_geom='' t0
+  local -i quick=0
+  while (( _TCD_LIVE_STOP == 0 )); do
+    geom="$(_tcd_cols)x$(_tcd_lines)"
+    # A resize leaves the old frame's tail behind; wipe once, then repaint.
+    [[ "$geom" == "$last_geom" ]] || { print -rn -- $'\e[2J'; last_geom="$geom" }
+
+    _tcd_live_draw "$(_tcd_live_frame)"
+
+    key='' t0=$EPOCHREALTIME
+    if read -s -t "$secs" -k 1 -u 0 key 2>/dev/null; then
+      quick=0
+      case "$key" in
+        q|Q)     break ;;
+        $'\003') _TCD_LIVE_STOP=2; break ;;   # Ctrl-C when the tty sends no signal
+      esac
+    elif (( EPOCHREALTIME - t0 < 0.05 )); then
+      # Failing instantly means stdin is gone, not that the frame timed out.
+      # Without this the loop would spin at full speed against a dead terminal.
+      (( ++quick >= 3 )) && break
+    else
+      quick=0
+    fi
+  done
+
+  _tcd_live_restore
+  (( _TCD_LIVE_STOP == 2 )) && return 130
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -682,6 +820,7 @@ _tcd_help() {
   print -r -- 'tcd — drive tmux agent sessions with short commands.
 
   tcd                  list sessions: number, ▸ if attached, status, age
+  tcd --live           the same list, refreshed in place; q or Ctrl-C quits
   tcd <n>              attach to row n of the list
   tcd <partial>        attach to the best match (exact name wins, then substring)
   tcd -                attach to the previous session
@@ -712,6 +851,7 @@ tcd() {
   case "${1:-}" in
     '')               _tcd_list; return ;;
     ls|list)          _tcd_list; return ;;
+    --live)           _tcd_live; return ;;
     -h|--help|help)   _tcd_help; return ;;
     -)                _tcd_last; return ;;
     cl|claude)        shift; _tcd_agent claude "$@"; return ;;
@@ -750,7 +890,7 @@ _tcd_completion() {
   names=( ${(f)"$(_tcd_names)"} )
   if (( CURRENT == 2 )); then
     compadd -a names
-    compadd close kill rm x cl co hosts doctor help -
+    compadd close kill rm x cl co hosts doctor help - --live
     (( ${#TCD_HOSTS} )) && compadd -- "${(@)TCD_HOSTS/#/@}"
   elif [[ "${words[2]}" == (close|kill|rm|x) ]]; then
     compadd -a names

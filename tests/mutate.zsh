@@ -24,6 +24,19 @@ typeset -a mutations=(
   '--yolo is no longer rewritten|s/\[\[ "\$a" == "--yolo" \]\]/[[ "$a" == "--never" ]]/'
   'ssh failures lose their hint|s/(( rc == 255 ))/(( rc == -1 ))/'
   'a surviving session is reported closed|s/print -r -- "failed to close: \$s"/print -r -- "closed: $s"/'
+  # --live
+  'the live view draws one frame and stops|s/while (( _TCD_LIVE_STOP == 0 )); do/while false; do/'
+  'the live view never repaints after the first frame|s/^    _tcd_live_draw "\$(_tcd_live_frame)"$/    [[ -n "${_tcd_drawn:-}" ]] || _tcd_live_draw "$(_tcd_live_frame)"; _tcd_drawn=1/'
+  'the live table drifts from the real listing|s/body="\$(_tcd_list)" || rc=\$?/body="$(_tcd_rows)" || rc=$?/'
+  'live frames are not clamped to the terminal|s/(( \${#out} > avail )); then/(( 0 )); then/'
+  'the redraw clears the screen every frame|s/local out=\$'"'"'\\e\[H'"'"' i/local out=$'"'"'\\e[2J\\e[H'"'"' i/'
+  'the redraw leaves a trailing newline|s/print -rn -- "\$out"\$'"'"'\\e\[J'"'"'/print -r -- "$out"$'"'"'\\e[J'"'"'/'
+  'the live view never leaves the alternate screen|s/print -rn -- \$'"'"'\\e\[?25h\\e\[?1049l'"'"'//'
+  'the live view never restores the tty modes|s/command stty "\$_TCD_LIVE_TTY" 2>\/dev\/null/true/'
+  'Ctrl-C is not caught|s/trap '"'"'_TCD_LIVE_STOP=2'"'"' INT//'
+  'q does not quit|s/        q|Q)     break ;;//'
+  'a zero refresh interval is accepted|s/(( s < 0.2 )) \&\& s=0.2//'
+  'tcd --live is not wired up|s/^    --live)           _tcd_live; return ;;$//'
 )
 
 gaps=0 n=0
