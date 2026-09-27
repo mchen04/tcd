@@ -90,12 +90,32 @@ _ai_tmux_session() {
   local program="$2"
   shift 2
 
-  if [[ -n "${TMUX:-}" ]] || ! _tcd_have_tmux; then
+  if [[ -n "${TMUX:-}" ]] || ! _tcd_have_tmux || _tcd_is_oneshot "$program" "$@"; then
     command "$program" "$@"
     return
   fi
 
   _tcd_tmux new-session -A -s "$session_name" "$(_tcd_cmdline "$program" "$@")"
+}
+
+# One-shot commands (login, --version, exec, -p, ...) print a result and exit.
+# In a fresh tmux session that output vanishes the moment the session closes,
+# and `new-session -A` attaches to an agent already running there instead of
+# running the command at all. So they skip tmux.
+_tcd_is_oneshot() {
+  local program="$1" a
+  shift
+  for a in "$@"; do
+    case "$a" in
+      -h|--help|-v|-V|--version) return 0 ;;
+      -p|--print) [[ "$program" == claude ]] && return 0 ;;
+    esac
+  done
+  case "$program:${1:-}" in
+    codex:(exec|e|review|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|queue|archive|unarchive|delete|migrate-rollouts|exec-server|features|help)) return 0 ;;
+    claude:(auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|project|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)) return 0 ;;
+  esac
+  return 1
 }
 
 # Rewrite the convenience flag `--yolo` -> `--dangerously-skip-permissions`.
