@@ -387,9 +387,31 @@ claude --yolo --yolo
 assert_eq 'every --yolo is rewritten' \
   'claude --dangerously-skip-permissions --dangerously-skip-permissions' "${TMUX_CALL[5]}"
 
-claude -p --yolo --model opus
+claude --model opus --yolo 'hi'
 assert_eq '--yolo is rewritten in place among other flags' \
-  'claude -p --dangerously-skip-permissions --model opus' "${TMUX_CALL[5]}"
+  'claude --model opus --dangerously-skip-permissions hi' "${TMUX_CALL[5]}"
+
+# One-shot commands run in this terminal: in a fresh session their output
+# vanishes on exit, and -A would attach to a running agent instead.
+TMUX_CALL=()
+out="$(codex login)"
+assert_eq 'codex login runs directly' 'STUB codex [login]' "$out"
+assert_eq 'codex login does not call tmux' '' "${(j: :)TMUX_CALL}"
+out="$(codex exec 'do it')"
+assert_eq 'codex exec runs directly' 'STUB codex [exec] [do it]' "$out"
+out="$(codex --version)"
+assert_eq 'codex --version runs directly' 'STUB codex [--version]' "$out"
+out="$(claude -p --yolo 'hi')"
+assert_eq 'claude -p runs directly with --yolo rewritten' \
+  'STUB claude [-p] [--dangerously-skip-permissions] [hi]' "$out"
+out="$(claude auth status)"
+assert_eq 'claude auth runs directly' 'STUB claude [auth] [status]' "$out"
+assert_eq 'no one-shot command called tmux' '' "${(j: :)TMUX_CALL}"
+codex resume --last
+assert_eq 'codex resume still opens a session' 'new-session' "${TMUX_CALL[1]}"
+codex 'login page is broken'
+assert_eq 'a prompt that starts with a subcommand word still opens a session' \
+  'new-session' "${TMUX_CALL[1]}"
 
 claude --yolo-ish
 assert_eq 'only the exact --yolo flag is rewritten' 'claude --yolo-ish' "${TMUX_CALL[5]}"
